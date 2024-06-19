@@ -1,20 +1,13 @@
-
-
 import { NextResponse } from "next/server";
 import { PassThrough, Readable } from "stream";
 import nodemailer from "nodemailer";
-import { BlobServiceClient } from "@azure/storage-blob";
+import { uploadToAzureStream } from "@/utils/azure";
 import { validateAndTransformRemoteUrl } from "@/lib/utils";
 import { getGoogleDriveVideo } from "@/utils/googleDrive";
-
-const AZURE_CONTAINER_NAME = "your-container-name"; // replace with your container name
-const CHUNK_SIZE = 4 * 1024 * 1024; // 4 MB
 
 interface UploadResult {
   originalUrl: string;
 }
-
-// Utility class to convert ReadableStream to Node.js Readable stream
 class CustomReadableStream extends Readable {
   private innerStream: ReadableStream<Uint8Array>;
   private reader: ReadableStreamDefaultReader<Uint8Array>;
@@ -34,47 +27,16 @@ class CustomReadableStream extends Readable {
     }
   };
 }
-
-// Azure upload function
-async function uploadToAzureBlob(stream: Readable, filename: string) {
-  const blobServiceClient = BlobServiceClient.fromConnectionString(process.env.AZURE_STORAGE_CONNECTION_STRING as string);
-  const containerClient = blobServiceClient.getContainerClient(AZURE_CONTAINER_NAME);
-  const blockBlobClient = containerClient.getBlockBlobClient(filename);
-  
-  const buffer = await streamToBuffer(stream);
-  const blockIds: string[] = [];
-  let start = 0;
-
-  while (start < buffer.length) {
-    const end = Math.min(start + CHUNK_SIZE, buffer.length);
-    const chunk = buffer.slice(start, end);
-    const blockId = Buffer.from(`${start}`).toString('base64');
-    blockIds.push(blockId);
-    await blockBlobClient.stageBlock(blockId, chunk, chunk.length);
-    start = end;
-  }
-
-  await blockBlobClient.commitBlockList(blockIds);
-  return blockBlobClient.url;
-}
-
-// Utility function to convert stream to buffer
-function streamToBuffer(stream: Readable): Promise<Buffer> {
-  return new Promise((resolve, reject) => {
-    const chunks: Buffer[] = [];
-    stream.on('data', (chunk: Buffer) => chunks.push(Buffer.from(chunk)));
-    stream.on('end', () => resolve(Buffer.concat(chunks)));
-    stream.on('error', reject);
-  });
-}
-
 export async function POST(request: Request) {
   try {
     const data = await request.formData();
     const urls = data.getAll("urls") as string[];
 
     if (!urls.length) {
-      return NextResponse.json({ error: "No video URLs provided" }, { status: 400 });
+      return NextResponse.json(
+        { error: "No video URLs provided" },
+        { status: 400 }
+      );
     }
 
     const uploadedVideos: UploadResult[] = [];
@@ -94,26 +56,45 @@ export async function POST(request: Request) {
 
     for (const url of urls) {
       try {
-        const validatedUrl = await validateAndTransformRemoteUrl(url);
+        for (const url of urls) {
+          try {
+            const validatedUrl = await validateAndTransformRemoteUrl(url);
+      
+            let readableStream: Readable;
+            if (validatedUrl.includes("drive.google.com")) {
+              const driveFile = await getGoogleDriveVideo(validatedUrl);
+              readableStream = Readable.from(driveFile);
+            } else {
+              const response = await fetch(validatedUrl);
+              if (!response.ok || !response.body) {
+                throw new Error(`Failed to fetch video from ${url}`);
+              }
+      
+              readableStream = new CustomReadableStream(response.body);
+            }
+          
 
-        let readableStream: Readable;
-        if (validatedUrl.includes("drive.google.com")) {
-          const driveFile = await getGoogleDriveVideo(validatedUrl);
-          readableStream = Readable.from(driveFile);
-        } else {
-          const response = await fetch(validatedUrl);
-          if (!response.ok || !response.body) {
-            throw new Error(`Failed to fetch video from ${url}`);
-          }
-
-          readableStream = new CustomReadableStream(response.body);
-        }
-
+        // 3. Extract Filename
         const filename = validatedUrl.split("/").pop() || `video_${Date.now()}`;
 
-        const originalAzureUrl = await uploadToAzureBlob(readableStream, filename);
+        // PassThrough Stream to allow multiple consumptions
+        const passThroughStream = new PassThrough();
+        readableStream.pipe(passThroughStream);
 
-        const uploadResult: UploadResult = { originalUrl: originalAzureUrl };
+        const uploadStream = passThroughStream.pipe(new PassThrough());
+        // 4. Upload to Azure
+        // Upload original video to Azure directly from the stream
+        const originalAzureUrl = await uploadToAzureStream(
+          uploadStream,
+          filename
+        );
+
+        // create uploadresult object
+        const uploadResult: UploadResult = {
+          originalUrl: originalAzureUrl,
+          // processedUrls: uploadedProcessedUrls,
+        };
+
         uploadedVideos.push(uploadResult);
       } catch (error) {
         console.error(`Error processing URL ${url}:`, error);
@@ -146,6 +127,13 @@ export async function POST(request: Request) {
     return NextResponse.json({ success: true, data: uploadedVideos });
   } catch (error: any) {
     console.error("Error uploading and processing video:", error);
-    return NextResponse.json({ success: false, error: error.message || "Unknown error occurred" }, { status: 500 });
+    return NextResponse.json(
+      { success: false, error: error.message || "Unknown error occurred" },
+      { status: 500 }
+    );
   }
+}
+} catch (error) {
+  console.error(`Error:`, error);
+}
 }
