@@ -28,7 +28,7 @@ Crept Sync is a robust video management tool designed to streamline the process 
 1.  **Clone the Repository:**
 
     ```bash
-    git clone https://your-repository-url/crept-sync.git
+    git clone https://github.com/theteleporter/crept-sync.git
     ```
 
 2.  **Install Dependencies:**
