@@ -2,7 +2,7 @@
 
 [![MIT License](https://img.shields.io/badge/License-MIT-green.svg)](https://choosealicense.com/licenses/mit/)
 
-Crept Sync is a robust video management tool designed to streamline the process of uploading and managing videos across cloud storage platforms. It currently offers direct uploads from video URLs to Azure Blob Storage, with plans to integrate more features and cloud providers.
+Crept Sync is a robust video management tool designed to streamline the process of uploading and managing videos across cloud storage platforms. It currently offers direct uploads from video URLs to Azure Blob Storage, with plans to integrate more features and cloud providers. 
 
 ## Features
 
