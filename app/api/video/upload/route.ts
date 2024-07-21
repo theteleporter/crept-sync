@@ -3,7 +3,6 @@ import { PassThrough, Readable } from "stream";
 import nodemailer from "nodemailer";
 import { uploadToAzureStream } from "@/utils/azure";
 import { validateAndTransformRemoteUrl } from "@/lib/utils";
-import { getGoogleDriveVideo } from "@/utils/googleDrive";
 
 interface UploadResult {
   originalUrl: string;
@@ -67,19 +66,12 @@ export async function POST(request: Request) {
           throw new Error('URL validation failed');
         }
 
-        let readableStream: Readable;
-        if (validatedUrl.includes("drive.google.com")) {
-          const driveFile = await getGoogleDriveVideo(validatedUrl);
-          readableStream = Readable.from(driveFile);
-        } else {
-          const response = await fetch(validatedUrl);
-          if (!response.ok || !response.body) {
-            throw new Error(`Failed to fetch video from ${validatedUrl}`);
-          }
-
-          readableStream = new CustomReadableStream(response.body);
+        const response = await fetch(validatedUrl);
+        if (!response.ok || !response.body) {
+          throw new Error(`Failed to fetch video from ${validatedUrl}`);
         }
 
+        const readableStream = new CustomReadableStream(response.body);
         const filename = validatedUrl.split("/").pop() || `video_${Date.now()}`;
 
         const passThroughStream = new PassThrough();
