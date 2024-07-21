@@ -8,6 +8,7 @@ import { getGoogleDriveVideo } from "@/utils/googleDrive";
 interface UploadResult {
   originalUrl: string;
 }
+
 class CustomReadableStream extends Readable {
   private innerStream: ReadableStream<Uint8Array>;
   private reader: ReadableStreamDefaultReader<Uint8Array>;
@@ -23,10 +24,15 @@ class CustomReadableStream extends Readable {
     if (done) {
       this.push(null); // signal end of stream
     } else {
+      if (!value) {
+        this.emit('error', new Error('Stream read returned undefined value'));
+        return;
+      }
       this.push(Buffer.from(value)); // convert Uint8Array to Buffer
     }
   };
 }
+
 export async function POST(request: Request) {
   try {
     const data = await request.formData();
@@ -42,7 +48,6 @@ export async function POST(request: Request) {
     const uploadedVideos: UploadResult[] = [];
     const errors: string[] = [];
 
-    // Create transporter before the loop for efficiency
     const transporter = nodemailer.createTransport({
       host: "smtp.mailgun.org",
       port: 587,
@@ -56,43 +61,35 @@ export async function POST(request: Request) {
 
     for (const url of urls) {
       try {
-        for (const url of urls) {
-          try {
-            const validatedUrl = await validateAndTransformRemoteUrl(url);
-      
-            let readableStream: Readable;
-            if (validatedUrl.includes("drive.google.com")) {
-              const driveFile = await getGoogleDriveVideo(validatedUrl);
-              readableStream = Readable.from(driveFile);
-            } else {
-              const response = await fetch(validatedUrl);
-              if (!response.ok || !response.body) {
-                throw new Error(`Failed to fetch video from ${url}`);
-              }
-      
-              readableStream = new CustomReadableStream(response.body);
-            }
-          
+        const validatedUrl = await validateAndTransformRemoteUrl(url);
 
-        // 3. Extract Filename
+        if (!validatedUrl) {
+          throw new Error('URL validation failed');
+        }
+
+        let readableStream: Readable;
+        if (validatedUrl.includes("drive.google.com")) {
+          const driveFile = await getGoogleDriveVideo(validatedUrl);
+          readableStream = Readable.from(driveFile);
+        } else {
+          const response = await fetch(validatedUrl);
+          if (!response.ok || !response.body) {
+            throw new Error(`Failed to fetch video from ${validatedUrl}`);
+          }
+
+          readableStream = new CustomReadableStream(response.body);
+        }
+
         const filename = validatedUrl.split("/").pop() || `video_${Date.now()}`;
 
-        // PassThrough Stream to allow multiple consumptions
         const passThroughStream = new PassThrough();
         readableStream.pipe(passThroughStream);
 
         const uploadStream = passThroughStream.pipe(new PassThrough());
-        // 4. Upload to Azure
-        // Upload original video to Azure directly from the stream
-        const originalAzureUrl = await uploadToAzureStream(
-          uploadStream,
-          filename
-        );
+        const originalAzureUrl = await uploadToAzureStream(uploadStream, filename);
 
-        // create uploadresult object
         const uploadResult: UploadResult = {
           originalUrl: originalAzureUrl,
-          // processedUrls: uploadedProcessedUrls,
         };
 
         uploadedVideos.push(uploadResult);
@@ -102,7 +99,6 @@ export async function POST(request: Request) {
       }
     }
 
-    // Send email with uploaded URLs
     let emailText = "Videos Uploaded:\n\n";
     uploadedVideos.forEach((result) => {
       emailText += `Successfully uploaded video: ${result.originalUrl}\n`;
@@ -132,8 +128,4 @@ export async function POST(request: Request) {
       { status: 500 }
     );
   }
-}
-} catch (error) {
-  console.error(`Error:`, error);
-}
 }
